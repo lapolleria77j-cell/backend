@@ -43,3 +43,21 @@ export async function getUserById(id) {
   );
   return rows && rows[0] ? rows[0] : null;
 }
+
+/**
+ * Cambia la contraseña del usuario. Requiere la contraseña actual correcta.
+ * @returns {Promise<boolean>} true si se cambió correctamente
+ */
+export async function changePassword(userId, currentPassword, newPassword) {
+  const [rows] = await query(
+    'SELECT id, password_hash FROM usuarios WHERE id = ? AND activo = 1',
+    [userId]
+  );
+  const user = rows && rows[0] ? rows[0] : null;
+  if (!user) return false;
+  const valid = await bcrypt.compare(currentPassword, user.password_hash);
+  if (!valid) return false;
+  const newHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+  await query('UPDATE usuarios SET password_hash = ? WHERE id = ?', [newHash, userId]);
+  return true;
+}
