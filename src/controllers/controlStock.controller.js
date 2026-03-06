@@ -153,6 +153,47 @@ async function getGastosSesion(req, res, next) {
   }
 }
 
+async function anularMovimiento(req, res, next) {
+  try {
+    const sesionId = parseInt(req.params.id, 10);
+    const movimientoId = parseInt(req.params.movId, 10);
+    const motivo = (req.body.motivo || '').trim();
+    if (Number.isNaN(sesionId) || Number.isNaN(movimientoId)) {
+      const err = new Error('ID de sesión o movimiento inválido');
+      err.statusCode = 400;
+      return next(err);
+    }
+    const sesion = await controlStockService.anularMovimiento(sesionId, movimientoId, motivo || null, req.userId);
+    res.json({ ok: true, data: sesion });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function editarMovimiento(req, res, next) {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const err = new Error('Datos inválidos');
+      err.statusCode = 400;
+      err.errors = errors.array();
+      return next(err);
+    }
+    const sesionId = parseInt(req.params.id, 10);
+    const movimientoId = parseInt(req.params.movId, 10);
+    const cantidad = Number(req.body.cantidad);
+    if (Number.isNaN(sesionId) || Number.isNaN(movimientoId)) {
+      const err = new Error('ID de sesión o movimiento inválido');
+      err.statusCode = 400;
+      return next(err);
+    }
+    const sesion = await controlStockService.editarMovimiento(sesionId, movimientoId, cantidad, req.userId);
+    res.json({ ok: true, data: sesion });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export default {
   getSesionActualmenteAbierta,
   abrirSesion,
@@ -163,4 +204,6 @@ export default {
   getMovimientosSesion,
   agregarGasto,
   getGastosSesion,
+  anularMovimiento,
+  editarMovimiento,
 };

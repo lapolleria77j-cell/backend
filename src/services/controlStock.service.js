@@ -344,17 +344,20 @@ export async function getGastosSesion(sesionId) {
 
 /**
  * Lista los movimientos de salida (agregados) de una sesión de control de stock.
- * Son los registros en movimientos_stock con observación "Control de stock - sesión {id}".
+ * Incluye anulados/corregidos para que quede todo en el historial.
  */
 export async function getMovimientosSesion(sesionId) {
   const observacion = `Control de stock - sesión ${sesionId}`;
   const [rows] = await query(
     `SELECT m.id, m.producto_id, m.cantidad, m.creado_en,
+            m.anulado_en, m.anulado_por, m.motivo_anulacion,
             p.nombre AS producto_nombre, p.unidad_medida,
-            u.nombre_completo AS usuario_nombre
+            u.nombre_completo AS usuario_nombre,
+            u2.nombre_completo AS anulado_por_nombre
      FROM movimientos_stock m
      INNER JOIN productos p ON p.id = m.producto_id
      LEFT JOIN usuarios u ON u.id = m.usuario_id
+     LEFT JOIN usuarios u2 ON u2.id = m.anulado_por
      WHERE m.observacion = ? AND m.tipo = 'salida'
      ORDER BY m.creado_en ASC`,
     [observacion]
@@ -367,5 +370,139 @@ export async function getMovimientosSesion(sesionId) {
     cantidad: Number(r.cantidad),
     creado_en: r.creado_en,
     usuario_nombre: r.usuario_nombre || null,
+    anulado_en: r.anulado_en || null,
+    anulado_por: r.anulado_por || null,
+    anulado_por_nombre: r.anulado_por_nombre || null,
+    motivo_anulacion: r.motivo_anulacion || null,
   }));
+}
+
+/**
+ * Anula un movimiento de la sesión (solo si la sesión está abierta).
+ * Registra una entrada en movimientos_stock (devuelve stock al depósito) y marca el movimiento original como anulado.
+ */
+export async function anularMovimiento(sesionId, movimientoId, motivo, usuarioId) {
+  const [sesiones] = await query(
+    'SELECT id FROM sesiones_control_stock WHERE id = ? AND cerrado_en IS NULL',
+    [sesionId]
+  );
+  if (!sesiones || sesiones.length === 0) {
+    const err = new Error('Sesión no encontrada o ya está cerrada. Solo se pueden anular movimientos de sesiones abiertas.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const observacion = `Control de stock - sesión ${sesionId}`;
+  const [movRows] = await query(
+    'SELECT id, producto_id, cantidad, anulado_en FROM movimientos_stock WHERE id = ? AND observacion = ? AND tipo = ?',
+    [movimientoId, observacion, 'salida']
+  );
+  if (!movRows || movRows.length === 0) {
+    const err = new Error('Movimiento no encontrado o no pertenece a esta sesión');
+    err.statusCode = 404;
+    throw err;
+  }
+  const mov = movRows[0];
+  if (mov.anulado_en) {
+    const err = new Error('Este movimiento ya fue anulado o corregido');
+    err.statusCode = 400;
+    throw err;
+  }
+  const cantidad = Number(mov.cantidad);
+  const productoId = mov.producto_id;
+  const motivoTrim = (motivo || '').trim().slice(0, 255);
+
+  // Registrar entrada (devuelve stock al depósito) — queda en historial
+  const obsEntrada = `Anulación movimiento #${movimientoId} (Control de stock - sesión ${sesionId}). Cantidad devuelta: ${cantidad}.${motivoTrim ? ` Motivo: ${motivoTrim}.` : ''} Anulado por usuario id ${usuarioId || 'sistema'}`;
+  await movimientosService.crear(productoId, { tipo: 'entrada', cantidad, observacion: obsEntrada.slice(0, 255) }, usuarioId);
+
+  // Actualizar detalle de la sesión: restar la cantidad agregada
+  const [detalle] = await query(
+    'SELECT id, cantidad_agregada FROM sesiones_control_stock_detalle WHERE sesion_id = ? AND producto_id = ?',
+    [sesionId, productoId]
+  );
+  if (detalle && detalle.length > 0) {
+    const nuevaAgregada = Math.max(0, Number(detalle[0].cantidad_agregada) - cantidad);
+    await query(
+      'UPDATE sesiones_control_stock_detalle SET cantidad_agregada = ? WHERE id = ?',
+      [nuevaAgregada, detalle[0].id]
+    );
+  }
+
+  // Marcar movimiento original como anulado (queda en historial)
+  await query(
+    'UPDATE movimientos_stock SET anulado_en = NOW(), anulado_por = ?, motivo_anulacion = ? WHERE id = ?',
+    [usuarioId || null, motivoTrim || 'Anulación', movimientoId]
+  );
+
+  return obtenerSesion(sesionId);
+}
+
+/**
+ * Corrige la cantidad de un movimiento (solo si la sesión está abierta).
+ * Revierte el movimiento original con una entrada y crea una nueva salida con la cantidad correcta. Todo queda en historial.
+ */
+export async function editarMovimiento(sesionId, movimientoId, nuevaCantidad, usuarioId) {
+  const qty = Number(nuevaCantidad);
+  if (qty <= 0) {
+    const err = new Error('La cantidad debe ser mayor a 0');
+    err.statusCode = 400;
+    throw err;
+  }
+  const [sesiones] = await query(
+    'SELECT id FROM sesiones_control_stock WHERE id = ? AND cerrado_en IS NULL',
+    [sesionId]
+  );
+  if (!sesiones || sesiones.length === 0) {
+    const err = new Error('Sesión no encontrada o ya está cerrada. Solo se pueden editar movimientos de sesiones abiertas.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const observacion = `Control de stock - sesión ${sesionId}`;
+  const [movRows] = await query(
+    'SELECT id, producto_id, cantidad, anulado_en FROM movimientos_stock WHERE id = ? AND observacion = ? AND tipo = ?',
+    [movimientoId, observacion, 'salida']
+  );
+  if (!movRows || movRows.length === 0) {
+    const err = new Error('Movimiento no encontrado o no pertenece a esta sesión');
+    err.statusCode = 404;
+    throw err;
+  }
+  const mov = movRows[0];
+  if (mov.anulado_en) {
+    const err = new Error('Este movimiento ya fue anulado o corregido');
+    err.statusCode = 400;
+    throw err;
+  }
+  const cantidadAnterior = Number(mov.cantidad);
+  const productoId = mov.producto_id;
+
+  // 1) Reversión: entrada (devuelve la cantidad anterior al depósito) — historial
+  const obsReversion = `Corrección movimiento #${movimientoId}: reversión de cantidad ${cantidadAnterior} (Control de stock - sesión ${sesionId}). Nueva cantidad: ${qty}. Corregido por usuario id ${usuarioId || 'sistema'}`;
+  await movimientosService.crear(productoId, { tipo: 'entrada', cantidad: cantidadAnterior, observacion: obsReversion.slice(0, 255) }, usuarioId);
+
+  // 2) Nueva salida con la cantidad correcta
+  const obsSalida = `Control de stock - sesión ${sesionId} (corrección del movimiento #${movimientoId})`;
+  await movimientosService.crear(productoId, { tipo: 'salida', cantidad: qty, observacion: obsSalida }, usuarioId);
+
+  // 3) Actualizar detalle: cantidad_agregada = cantidad_agregada - anterior + nueva
+  const [detalle] = await query(
+    'SELECT id, cantidad_agregada FROM sesiones_control_stock_detalle WHERE sesion_id = ? AND producto_id = ?',
+    [sesionId, productoId]
+  );
+  if (detalle && detalle.length > 0) {
+    const nuevaAgregada = Math.max(0, Number(detalle[0].cantidad_agregada) - cantidadAnterior + qty);
+    await query(
+      'UPDATE sesiones_control_stock_detalle SET cantidad_agregada = ? WHERE id = ?',
+      [nuevaAgregada, detalle[0].id]
+    );
+  }
+
+  // 4) Marcar movimiento original como corregido
+  const motivo = `Corregido: cantidad anterior ${cantidadAnterior}, nueva ${qty}`;
+  await query(
+    'UPDATE movimientos_stock SET anulado_en = NOW(), anulado_por = ?, motivo_anulacion = ? WHERE id = ?',
+    [usuarioId || null, motivo, movimientoId]
+  );
+
+  return obtenerSesion(sesionId);
 }

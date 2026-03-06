@@ -41,6 +41,18 @@ router.post(
 router.get('/sesiones', requireRole('admin'), controlStockController.listarSesiones);
 router.get('/sesiones/:id', requireRole('admin'), controlStockController.obtenerSesion);
 router.get('/sesiones/:id/movimientos', requireRole('admin'), controlStockController.getMovimientosSesion);
+router.post(
+  '/sesiones/:id/movimientos/:movId/anular',
+  [body('motivo').optional().trim().isLength({ max: 255 })],
+  requireRole('admin'),
+  controlStockController.anularMovimiento
+);
+router.patch(
+  '/sesiones/:id/movimientos/:movId',
+  [body('cantidad').isFloat({ min: 0.01 }).withMessage('cantidad debe ser mayor a 0')],
+  requireRole('admin'),
+  controlStockController.editarMovimiento
+);
 router.get('/sesiones/:id/gastos', requireRole('admin'), controlStockController.getGastosSesion);
 
 export default router;

@@ -51,11 +51,16 @@ CREATE TABLE movimientos_stock (
   observacion VARCHAR(255) NULL DEFAULT NULL,
   usuario_id INT UNSIGNED NULL DEFAULT NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  anulado_en DATETIME NULL DEFAULT NULL,
+  anulado_por INT UNSIGNED NULL DEFAULT NULL,
+  motivo_anulacion VARCHAR(255) NULL DEFAULT NULL,
   PRIMARY KEY (id),
   KEY idx_mov_producto (producto_id),
   KEY idx_mov_creado (creado_en),
+  KEY idx_mov_anulado (anulado_en),
   CONSTRAINT fk_mov_producto FOREIGN KEY (producto_id) REFERENCES productos (id) ON DELETE CASCADE,
-  CONSTRAINT fk_mov_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios (id) ON DELETE SET NULL
+  CONSTRAINT fk_mov_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios (id) ON DELETE SET NULL,
+  CONSTRAINT fk_mov_anulado_por FOREIGN KEY (anulado_por) REFERENCES usuarios (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Control de stock: sesiones abiertas/cerradas por la empleada (gastos primero por FK)
