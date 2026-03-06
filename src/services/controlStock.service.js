@@ -351,6 +351,7 @@ export async function getMovimientosSesion(sesionId) {
   const [rows] = await query(
     `SELECT m.id, m.producto_id, m.cantidad, m.creado_en,
             m.anulado_en, m.anulado_por, m.motivo_anulacion,
+            m.usuario_id,
             p.nombre AS producto_nombre, p.unidad_medida,
             u.nombre_completo AS usuario_nombre,
             u2.nombre_completo AS anulado_por_nombre
@@ -369,6 +370,7 @@ export async function getMovimientosSesion(sesionId) {
     unidad_medida: r.unidad_medida,
     cantidad: Number(r.cantidad),
     creado_en: r.creado_en,
+    usuario_id: r.usuario_id ?? null,
     usuario_nombre: r.usuario_nombre || null,
     anulado_en: r.anulado_en || null,
     anulado_por: r.anulado_por || null,
@@ -379,9 +381,9 @@ export async function getMovimientosSesion(sesionId) {
 
 /**
  * Anula un movimiento de la sesión (solo si la sesión está abierta).
- * Registra una entrada en movimientos_stock (devuelve stock al depósito) y marca el movimiento original como anulado.
+ * Si esEmpleado (no admin), solo puede anular movimientos propios (usuario_id === usuarioId).
  */
-export async function anularMovimiento(sesionId, movimientoId, motivo, usuarioId) {
+export async function anularMovimiento(sesionId, movimientoId, motivo, usuarioId, esAdmin = true) {
   const [sesiones] = await query(
     'SELECT id FROM sesiones_control_stock WHERE id = ? AND cerrado_en IS NULL',
     [sesionId]
@@ -393,7 +395,7 @@ export async function anularMovimiento(sesionId, movimientoId, motivo, usuarioId
   }
   const observacion = `Control de stock - sesión ${sesionId}`;
   const [movRows] = await query(
-    'SELECT id, producto_id, cantidad, anulado_en FROM movimientos_stock WHERE id = ? AND observacion = ? AND tipo = ?',
+    'SELECT id, producto_id, cantidad, anulado_en, usuario_id FROM movimientos_stock WHERE id = ? AND observacion = ? AND tipo = ?',
     [movimientoId, observacion, 'salida']
   );
   if (!movRows || movRows.length === 0) {
@@ -402,6 +404,11 @@ export async function anularMovimiento(sesionId, movimientoId, motivo, usuarioId
     throw err;
   }
   const mov = movRows[0];
+  if (!esAdmin && Number(mov.usuario_id) !== Number(usuarioId)) {
+    const err = new Error('Solo podés anular los movimientos que registraste vos');
+    err.statusCode = 403;
+    throw err;
+  }
   if (mov.anulado_en) {
     const err = new Error('Este movimiento ya fue anulado o corregido');
     err.statusCode = 400;
@@ -439,9 +446,9 @@ export async function anularMovimiento(sesionId, movimientoId, motivo, usuarioId
 
 /**
  * Corrige la cantidad de un movimiento (solo si la sesión está abierta).
- * Revierte el movimiento original con una entrada y crea una nueva salida con la cantidad correcta. Todo queda en historial.
+ * Si esEmpleado (no admin), solo puede editar movimientos propios (usuario_id === usuarioId).
  */
-export async function editarMovimiento(sesionId, movimientoId, nuevaCantidad, usuarioId) {
+export async function editarMovimiento(sesionId, movimientoId, nuevaCantidad, usuarioId, esAdmin = true) {
   const qty = Number(nuevaCantidad);
   if (qty <= 0) {
     const err = new Error('La cantidad debe ser mayor a 0');
@@ -459,7 +466,7 @@ export async function editarMovimiento(sesionId, movimientoId, nuevaCantidad, us
   }
   const observacion = `Control de stock - sesión ${sesionId}`;
   const [movRows] = await query(
-    'SELECT id, producto_id, cantidad, anulado_en FROM movimientos_stock WHERE id = ? AND observacion = ? AND tipo = ?',
+    'SELECT id, producto_id, cantidad, anulado_en, usuario_id FROM movimientos_stock WHERE id = ? AND observacion = ? AND tipo = ?',
     [movimientoId, observacion, 'salida']
   );
   if (!movRows || movRows.length === 0) {
@@ -468,6 +475,11 @@ export async function editarMovimiento(sesionId, movimientoId, nuevaCantidad, us
     throw err;
   }
   const mov = movRows[0];
+  if (!esAdmin && Number(mov.usuario_id) !== Number(usuarioId)) {
+    const err = new Error('Solo podés editar los movimientos que registraste vos');
+    err.statusCode = 403;
+    throw err;
+  }
   if (mov.anulado_en) {
     const err = new Error('Este movimiento ya fue anulado o corregido');
     err.statusCode = 400;

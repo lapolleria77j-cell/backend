@@ -107,6 +107,15 @@ async function getMovimientosSesion(req, res, next) {
       err.statusCode = 400;
       return next(err);
     }
+    // Empleado solo puede ver movimientos de la sesión actual abierta
+    if (req.user?.rol !== 'admin') {
+      const sesionAbierta = await controlStockService.getSesionAbierta();
+      if (!sesionAbierta || sesionAbierta.id !== id) {
+        const err = new Error('Solo podés ver los movimientos de la sesión actual');
+        err.statusCode = 403;
+        return next(err);
+      }
+    }
     const list = await controlStockService.getMovimientosSesion(id);
     res.json({ ok: true, data: list });
   } catch (err) {
@@ -163,7 +172,8 @@ async function anularMovimiento(req, res, next) {
       err.statusCode = 400;
       return next(err);
     }
-    const sesion = await controlStockService.anularMovimiento(sesionId, movimientoId, motivo || null, req.userId);
+    const esAdmin = req.user?.rol === 'admin';
+    const sesion = await controlStockService.anularMovimiento(sesionId, movimientoId, motivo || null, req.userId, esAdmin);
     res.json({ ok: true, data: sesion });
   } catch (err) {
     next(err);
@@ -187,7 +197,8 @@ async function editarMovimiento(req, res, next) {
       err.statusCode = 400;
       return next(err);
     }
-    const sesion = await controlStockService.editarMovimiento(sesionId, movimientoId, cantidad, req.userId);
+    const esAdmin = req.user?.rol === 'admin';
+    const sesion = await controlStockService.editarMovimiento(sesionId, movimientoId, cantidad, req.userId, esAdmin);
     res.json({ ok: true, data: sesion });
   } catch (err) {
     next(err);
