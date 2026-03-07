@@ -195,6 +195,40 @@ export async function agregar(sesionId, productoId, cantidad, usuarioIdRegistra)
   return sesion && sesion.id === sesionId ? sesion : null;
 }
 
+function normalizarItemsFinales(items) {
+  return new Map((items || []).map((i) => [Number(i.producto_id), Number(i.cantidad_final)]));
+}
+
+async function aplicarFinalesSesion(sesionId, items) {
+  const mapFinal = normalizarItemsFinales(items);
+  const [detalle] = await query(
+    'SELECT id, producto_id, cantidad_inicial, cantidad_agregada FROM sesiones_control_stock_detalle WHERE sesion_id = ?',
+    [sesionId]
+  );
+  for (const d of detalle || []) {
+    const finalQty = mapFinal.get(d.producto_id);
+    const inicial = Number(d.cantidad_inicial);
+    const agregada = Number(d.cantidad_agregada);
+    const disponible = inicial + agregada;
+    const finalVal = finalQty != null && !Number.isNaN(finalQty) ? finalQty : disponible;
+
+    // Defensa crítica: no permitir cierres incoherentes que rompan vendidos (ej. 3580 en vez de 3.58).
+    if (finalVal > disponible + 0.000001) {
+      const err = new Error(
+        `Cantidad final inválida para el producto ${d.producto_id}: no puede ser mayor al disponible (${disponible}).`
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const vendida = Math.max(0, disponible - finalVal);
+    await query(
+      'UPDATE sesiones_control_stock_detalle SET cantidad_final = ?, cantidad_vendida = ? WHERE id = ?',
+      [finalVal, vendida, d.id]
+    );
+  }
+}
+
 /**
  * Cierra la sesión registrando cantidad_final por producto. Calcula cantidad_vendida = inicial + agregado - final.
  * El "final" queda en el negocio (no se devuelve al inventario/depósito).
@@ -206,23 +240,28 @@ export async function cerrarSesion(sesionId, items) {
     err.statusCode = 404;
     throw err;
   }
-  const mapFinal = new Map((items || []).map((i) => [Number(i.producto_id), Number(i.cantidad_final)]));
-  const [detalle] = await query(
-    'SELECT id, producto_id, cantidad_inicial, cantidad_agregada FROM sesiones_control_stock_detalle WHERE sesion_id = ?',
-    [sesionId]
-  );
-  for (const d of detalle || []) {
-    const finalQty = mapFinal.get(d.producto_id);
-    const inicial = Number(d.cantidad_inicial);
-    const agregada = Number(d.cantidad_agregada);
-    const finalVal = finalQty != null && !Number.isNaN(finalQty) ? finalQty : inicial + agregada;
-    const vendida = Math.max(0, inicial + agregada - finalVal);
-    await query(
-      'UPDATE sesiones_control_stock_detalle SET cantidad_final = ?, cantidad_vendida = ? WHERE id = ?',
-      [finalVal, vendida, d.id]
-    );
-  }
+  await aplicarFinalesSesion(sesionId, items);
   await query('UPDATE sesiones_control_stock SET cerrado_en = NOW() WHERE id = ?', [sesionId]);
+  return obtenerSesion(sesionId);
+}
+
+/**
+ * Permite al admin corregir cantidades finales de una sesión ya cerrada.
+ * Recalcula cantidad_vendida en base a inicial + agregada - final.
+ */
+export async function corregirFinalesSesionCerrada(sesionId, items) {
+  const [sesiones] = await query('SELECT id, cerrado_en FROM sesiones_control_stock WHERE id = ?', [sesionId]);
+  if (!sesiones || sesiones.length === 0) {
+    const err = new Error('Sesión no encontrada');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!sesiones[0].cerrado_en) {
+    const err = new Error('La sesión aún está abierta. Usá el flujo normal de cierre.');
+    err.statusCode = 400;
+    throw err;
+  }
+  await aplicarFinalesSesion(sesionId, items);
   return obtenerSesion(sesionId);
 }
 

@@ -205,6 +205,29 @@ async function editarMovimiento(req, res, next) {
   }
 }
 
+async function corregirFinalesSesion(req, res, next) {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const err = new Error('Datos inválidos');
+      err.statusCode = 400;
+      err.errors = errors.array();
+      return next(err);
+    }
+    const sesionId = parseInt(req.params.id, 10);
+    const items = req.body.items;
+    if (Number.isNaN(sesionId)) {
+      const err = new Error('ID de sesión inválido');
+      err.statusCode = 400;
+      return next(err);
+    }
+    const sesion = await controlStockService.corregirFinalesSesionCerrada(sesionId, items);
+    res.json({ ok: true, data: sesion });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export default {
   getSesionActualmenteAbierta,
   abrirSesion,
@@ -217,4 +240,5 @@ export default {
   getGastosSesion,
   anularMovimiento,
   editarMovimiento,
+  corregirFinalesSesion,
 };

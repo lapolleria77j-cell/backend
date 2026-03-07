@@ -29,6 +29,17 @@ router.post(
   controlStockController.cerrar
 );
 
+router.patch(
+  '/sesiones/:id/finales',
+  requireRole('admin'),
+  [
+    body('items').isArray().withMessage('items debe ser un array'),
+    body('items.*.producto_id').isInt({ min: 1 }).withMessage('producto_id inválido en item'),
+    body('items.*.cantidad_final').isFloat({ min: 0 }).withMessage('cantidad_final debe ser >= 0'),
+  ],
+  controlStockController.corregirFinalesSesion
+);
+
 router.post(
   '/sesiones/:id/gastos',
   [
