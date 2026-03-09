@@ -14,7 +14,45 @@ function mapRow(row) {
 
 export async function listar() {
   const [rows] = await query(`SELECT ${FIELDS} FROM productos ORDER BY nombre`);
-  return rows.map(mapRow);
+
+  // Stock en negocio: usamos la última sesión de control de stock cerrada.
+  const [prevSesiones] = await query(
+    `SELECT id
+     FROM sesiones_control_stock
+     WHERE cerrado_en IS NOT NULL
+     ORDER BY cerrado_en DESC
+     LIMIT 1`
+  );
+
+  let stockNegocioPorProducto = new Map();
+  if (prevSesiones && prevSesiones.length > 0) {
+    const prevId = prevSesiones[0].id;
+    const [detallePrevio] = await query(
+      `SELECT producto_id, cantidad_final
+       FROM sesiones_control_stock_detalle
+       WHERE sesion_id = ?`,
+      [prevId]
+    );
+    stockNegocioPorProducto = new Map(
+      (detallePrevio || []).map((row) => [
+        Number(row.producto_id),
+        row.cantidad_final != null ? Number(row.cantidad_final) : 0,
+      ])
+    );
+  }
+
+  return rows.map((r) => {
+    const base = mapRow(r);
+    const deposito = base.stock;
+    const negocio = stockNegocioPorProducto.get(base.id) ?? 0;
+    const total = deposito + negocio;
+    return {
+      ...base,
+      stock_deposito: deposito,
+      stock_negocio: negocio,
+      stock_total: total,
+    };
+  });
 }
 
 export async function obtenerPorId(id) {
